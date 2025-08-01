@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Thockify Settings</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="popup-container">
+      <header class="popup-header">
+        <h1>Thockify</h1>
+      </header>
+
+      <main class="popup-main">
+        <!-- Extension Status -->
+        <div class="control-group">
+          <div class="status-indicator">
+            <div class="status-dot" id="statusDot"></div>
+            <span class="status-text" id="statusText">Loading...</span>
+          </div>
+
+          <label class="toggle-switch">
+            <input
+              type="checkbox"
+              id="enableToggle"
+              aria-label="Enable or disable Thockify extension"
+            />
+            <span class="toggle-slider"></span>
+          </label>
+        </div>
+
+        <!-- Volume Control -->
+        <div class="control-group volume-control">
+          <div>
+            <button
+              type="button"
+              class="speaker-icon"
+              id="speakerIcon"
+              aria-label="Mute or unmute keyboard sounds"
+            >
+              🔊
+            </button>
+
+            <div class="volume-slider-container">
+              <input
+                type="range"
+                class="volume-slider"
+                id="volumeSlider"
+                min="0"
+                max="100"
+                step="1"
+                aria-label="Volume control slider. Use arrow keys to adjust."
+              />
+              <span class="volume-percentage" id="volumePercentage">50%</span>
+            </div>
+          </div>
+        </div>
+
+        <!-- Theme Selection (Coming Soon) -->
+        <div class="control-group future-feature">
+          <label class="control-label" for="themeSelect">Theme</label>
+          <select
+            class="theme-select"
+            id="themeSelect"
+            disabled
+            aria-label="Select keyboard sound theme"
+          >
+            <option value="mechanical-blue">Mechanical Blue</option>
+            <option value="cherry-red">Cherry Red</option>
+            <option value="brown-tactile">Brown Tactile</option>
+            <option value="linear-black">Linear Black</option>
+            <option value="custom">Custom</option>
+          </select>
+          <div class="future-note">Coming soon!</div>
+        </div>
+      </main>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
