@@ -1,0 +1,58 @@
+{
+  "extName": {
+    "message": "Thockify",
+    "description": "Extension name"
+  },
+  "extDescription": {
+    "message": "Add satisfying mechanical keyboard sounds to any website as you type",
+    "description": "Extension description"
+  },
+  "popupTitle": {
+    "message": "Thockify Settings",
+    "description": "Title shown in the popup"
+  },
+  "enabledStatus": {
+    "message": "Enabled",
+    "description": "Status when extension is enabled"
+  },
+  "disabledStatus": {
+    "message": "Disabled",
+    "description": "Status when extension is disabled"
+  },
+  "volumeLabel": {
+    "message": "Volume",
+    "description": "Label for volume control"
+  },
+  "muteButton": {
+    "message": "Mute",
+    "description": "Button to mute sounds"
+  },
+  "unmuteButton": {
+    "message": "Unmute",
+    "description": "Button to unmute sounds"
+  },
+  "themeLabel": {
+    "message": "Theme",
+    "description": "Label for theme selection"
+  },
+  "comingSoon": {
+    "message": "Coming soon!",
+    "description": "Text for features not yet implemented"
+  },
+  "shortcutToggle": {
+    "message": "Toggle Thockify",
+    "description": "Description for toggle keyboard shortcut"
+  },
+  "shortcutVolumeUp": {
+    "message": "Volume Up",
+    "description": "Description for volume up shortcut"
+  },
+  "shortcutVolumeDown": {
+    "message": "Volume Down",
+    "description": "Description for volume down shortcut"
+  },
+  "shortcutMute": {
+    "message": "Mute/Unmute",
+    "description": "Description for mute toggle shortcut"
+  }
+}
