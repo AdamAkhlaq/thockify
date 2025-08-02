@@ -1,0 +1,72 @@
+{
+  "manifest_version": 3,
+  "name": "Thockify",
+  "version": "1.0.0",
+  "description": "Get that $200+ mechanical keyboard sound experience for FREE on any website. Transform your typing with authentic mechanical keyboard sounds.",
+  "author": "AdamAkhlaq",
+  "homepage_url": "https://github.com/AdamAkhlaq/thockify",
+
+  "icons": {
+    "16": "assets/icons/icon16.png",
+    "32": "assets/icons/icon32.png",
+    "48": "assets/icons/icon48.png",
+    "128": "assets/icons/icon128.png"
+  },
+
+  "background": {
+    "service_worker": "service-worker.js"
+  },
+
+  "content_scripts": [
+    {
+      "matches": ["<all_urls>"],
+      "js": ["content-script.js"],
+      "run_at": "document_idle"
+    }
+  ],
+
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "Thockify - Mechanical Keyboard Sounds",
+    "default_icon": {
+      "16": "assets/icons/icon16.png",
+      "32": "assets/icons/icon32.png",
+      "48": "assets/icons/icon48.png",
+      "128": "assets/icons/icon128.png"
+    }
+  },
+
+  "permissions": ["storage", "activeTab"],
+
+  "host_permissions": ["<all_urls>"],
+
+  "commands": {
+    "toggle-extension": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+T",
+        "mac": "Command+Shift+T"
+      },
+      "description": "Toggle Thockify on/off"
+    },
+    "toggle-mute": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+M",
+        "mac": "Command+Shift+M"
+      },
+      "description": "Mute/unmute keyboard sounds"
+    }
+  },
+
+  "content_security_policy": {
+    "extension_pages": "script-src 'self'; object-src 'self'"
+  },
+
+  "default_locale": "en",
+
+  "web_accessible_resources": [
+    {
+      "resources": ["assets/sounds/*.wav", "assets/sounds/*.mp3"],
+      "matches": ["<all_urls>"]
+    }
+  ]
+}
