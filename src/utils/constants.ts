@@ -98,13 +98,20 @@ export const PATHS = {
   SOUNDS_DIR: 'assets/sounds',
   ICONS_DIR: 'assets/icons',
 
-  // Sound files
+  // Sound files - press/release structure
   SOUND_FILES: {
-    normal: 'keypress-normal.wav',
-    spacebar: 'keypress-spacebar.wav',
-    enter: 'keypress-enter.wav',
-    shift: 'keypress-shift.wav',
-    modifier: 'keypress-modifier.wav',
+    press: {
+      generic: 'alpaca/press/GENERIC.mp3',
+      backspace: 'alpaca/press/BACKSPACE.mp3',
+      enter: 'alpaca/press/ENTER.mp3',
+      space: 'alpaca/press/SPACE.mp3',
+    },
+    release: {
+      generic: 'alpaca/release/GENERIC.mp3',
+      backspace: 'alpaca/release/BACKSPACE.mp3',
+      enter: 'alpaca/release/ENTER.mp3',
+      space: 'alpaca/release/SPACE.mp3',
+    },
   },
 
   // Icon files

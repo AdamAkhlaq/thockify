@@ -9,18 +9,19 @@ export interface ThockifyAudioContext {
   buffers?: Map<string, AudioBuffer>;
 }
 
-export type KeyType = 'normal' | 'spacebar' | 'enter' | 'shift' | 'modifier';
+export type KeyType = 'generic' | 'backspace' | 'enter' | 'space';
+export type SoundAction = 'press' | 'release';
 
 /**
- * Classify key based on event properties
+ * Classify key based on event properties for press/release sounds
  */
 export function classifyKey(event: KeyboardEvent): KeyType {
   const key = event.key.toLowerCase();
   const code = event.code.toLowerCase();
 
-  // Spacebar
+  // Space key
   if (key === ' ' || code === 'space') {
-    return 'spacebar';
+    return 'space';
   }
 
   // Enter key
@@ -28,29 +29,13 @@ export function classifyKey(event: KeyboardEvent): KeyType {
     return 'enter';
   }
 
-  // Shift keys
-  if (key === 'shift' || code.includes('shift')) {
-    return 'shift';
+  // Backspace key
+  if (key === 'backspace' || code === 'backspace') {
+    return 'backspace';
   }
 
-  // Other modifier keys
-  if (
-    key === 'control' ||
-    key === 'alt' ||
-    key === 'meta' ||
-    key === 'tab' ||
-    key === 'escape' ||
-    code.includes('control') ||
-    code.includes('alt') ||
-    code.includes('meta') ||
-    code.includes('tab') ||
-    code.includes('escape')
-  ) {
-    return 'modifier';
-  }
-
-  // Normal alphanumeric and symbol keys
-  return 'normal';
+  // All other keys (alphanumeric, symbols, modifiers, etc.)
+  return 'generic';
 }
 
 /**
