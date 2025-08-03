@@ -39,6 +39,21 @@ export class AudioManager {
   private readonly keyMappingConfig = new Map<string, KeyType>();
   private readonly fallbackMapping = new Map<KeyType, KeyType>();
 
+  // Press/release sound logic and timing management
+  private readonly activeKeys = new Map<
+    string,
+    {
+      pressTime: number;
+      keyType: KeyType;
+      isPressPlayed: boolean;
+      timeoutId?: number;
+    }
+  >();
+  private readonly keyRepeatThrottle = new Map<string, number>();
+  private readonly minPressDuration: number = 50; // Minimum ms between press and release
+  private readonly maxKeyHoldTime: number = 5000; // Auto-release after 5 seconds
+  private readonly repeatKeyThrottle: number = 16; // ~60fps throttling for repeat events
+
   /**
    * Initialize the audio system with enhanced Web Audio API features
    */
@@ -218,6 +233,228 @@ export class AudioManager {
     return {
       press: this.audioBuffers.has(pressKey),
       release: this.audioBuffers.has(releaseKey),
+    };
+  }
+
+  /**
+   * Handle keydown event with press/release timing logic
+   */
+  async handleKeyDown(
+    event: KeyboardEvent,
+    volume: number = 1.0
+  ): Promise<void> {
+    const keyIdentifier = this.getKeyIdentifier(event);
+    const currentTime = performance.now();
+
+    // Skip if this is a repeat keydown event (key held down)
+    if (event.repeat && this.activeKeys.has(keyIdentifier)) {
+      // Check throttling for repeat events
+      const lastRepeatTime = this.keyRepeatThrottle.get(keyIdentifier) || 0;
+      if (currentTime - lastRepeatTime < this.repeatKeyThrottle) {
+        return;
+      }
+      this.keyRepeatThrottle.set(keyIdentifier, currentTime);
+      return; // Don't play sound for repeat events
+    }
+
+    // If key is already active, ignore (shouldn't happen but safety check)
+    if (this.activeKeys.has(keyIdentifier)) {
+      return;
+    }
+
+    const keyType = this.classifyKey(event);
+
+    // Register key as active
+    const keyInfo = {
+      pressTime: currentTime,
+      keyType,
+      isPressPlayed: false,
+    };
+
+    // Set up auto-release timeout
+    const timeoutId = window.setTimeout(() => {
+      this.handleAutoRelease(keyIdentifier);
+    }, this.maxKeyHoldTime);
+
+    this.activeKeys.set(keyIdentifier, { ...keyInfo, timeoutId });
+
+    // Play press sound
+    try {
+      await this.playKeySound(keyType, 'press', volume);
+      const updatedKeyInfo = this.activeKeys.get(keyIdentifier);
+      if (updatedKeyInfo) {
+        updatedKeyInfo.isPressPlayed = true;
+      }
+    } catch (error) {
+      console.error('Failed to play press sound:', error);
+    }
+  }
+
+  /**
+   * Handle keyup event with timing validation
+   */
+  async handleKeyUp(event: KeyboardEvent, volume: number = 1.0): Promise<void> {
+    const keyIdentifier = this.getKeyIdentifier(event);
+    const keyInfo = this.activeKeys.get(keyIdentifier);
+
+    if (!keyInfo) {
+      // Key wasn't tracked (might be from before extension enabled)
+      // Play release sound anyway for user experience
+      const keyType = this.classifyKey(event);
+      await this.playKeySound(keyType, 'release', volume);
+      return;
+    }
+
+    const currentTime = performance.now();
+    const pressDuration = currentTime - keyInfo.pressTime;
+
+    // Clear auto-release timeout
+    if (keyInfo.timeoutId) {
+      window.clearTimeout(keyInfo.timeoutId);
+    }
+
+    // Remove from active keys
+    this.activeKeys.delete(keyIdentifier);
+    this.keyRepeatThrottle.delete(keyIdentifier);
+
+    // Only play release sound if press was played and minimum duration met
+    if (keyInfo.isPressPlayed && pressDuration >= this.minPressDuration) {
+      try {
+        await this.playKeySound(keyInfo.keyType, 'release', volume);
+      } catch (error) {
+        console.error('Failed to play release sound:', error);
+      }
+    }
+  }
+
+  /**
+   * Handle automatic key release (timeout)
+   */
+  private async handleAutoRelease(keyIdentifier: string): Promise<void> {
+    const keyInfo = this.activeKeys.get(keyIdentifier);
+    if (!keyInfo) return;
+
+    console.debug(`Auto-releasing stuck key: ${keyIdentifier}`);
+
+    // Remove from tracking
+    this.activeKeys.delete(keyIdentifier);
+    this.keyRepeatThrottle.delete(keyIdentifier);
+
+    // Play release sound if press was played
+    if (keyInfo.isPressPlayed) {
+      try {
+        await this.playKeySound(keyInfo.keyType, 'release', 0.7); // Slightly quieter for auto-release
+      } catch (error) {
+        console.error('Failed to play auto-release sound:', error);
+      }
+    }
+  }
+
+  /**
+   * Get unique identifier for a key event
+   */
+  private getKeyIdentifier(event: KeyboardEvent): string {
+    // Use location to distinguish between left/right modifier keys
+    return `${event.code}:${event.location}`;
+  }
+
+  /**
+   * Check if a key is currently pressed
+   */
+  isKeyPressed(event: KeyboardEvent): boolean {
+    const keyIdentifier = this.getKeyIdentifier(event);
+    return this.activeKeys.has(keyIdentifier);
+  }
+
+  /**
+   * Get current active keys information
+   */
+  getActiveKeysInfo(): {
+    count: number;
+    keys: Array<{
+      identifier: string;
+      keyType: KeyType;
+      pressDuration: number;
+      isPressPlayed: boolean;
+    }>;
+  } {
+    const currentTime = performance.now();
+    const keys = Array.from(this.activeKeys.entries()).map(
+      ([identifier, info]) => ({
+        identifier,
+        keyType: info.keyType,
+        pressDuration: currentTime - info.pressTime,
+        isPressPlayed: info.isPressPlayed,
+      })
+    );
+
+    return {
+      count: this.activeKeys.size,
+      keys,
+    };
+  }
+
+  /**
+   * Clear all active keys (useful for cleanup)
+   */
+  clearActiveKeys(): void {
+    // Clear all timeouts
+    this.activeKeys.forEach(keyInfo => {
+      if (keyInfo.timeoutId) {
+        window.clearTimeout(keyInfo.timeoutId);
+      }
+    });
+
+    this.activeKeys.clear();
+    this.keyRepeatThrottle.clear();
+    console.debug('All active keys cleared');
+  }
+
+  /**
+   * Get press/release timing statistics for performance monitoring
+   */
+  getTimingStats(): {
+    activeKeysCount: number;
+    averagePressDuration: number;
+    longestPressedKey?: {
+      identifier: string;
+      duration: number;
+      keyType: KeyType;
+    };
+  } {
+    const currentTime = performance.now();
+    const activeKeys = Array.from(this.activeKeys.entries());
+
+    if (activeKeys.length === 0) {
+      return {
+        activeKeysCount: 0,
+        averagePressDuration: 0,
+      };
+    }
+
+    const durations = activeKeys.map(
+      ([_, info]) => currentTime - info.pressTime
+    );
+    const averagePressDuration =
+      durations.reduce((sum, duration) => sum + duration, 0) / durations.length;
+
+    const longestPress = activeKeys.reduce(
+      (longest, [identifier, info]) => {
+        const duration = currentTime - info.pressTime;
+        if (!longest || duration > longest.duration) {
+          return { identifier, duration, keyType: info.keyType };
+        }
+        return longest;
+      },
+      undefined as
+        | { identifier: string; duration: number; keyType: KeyType }
+        | undefined
+    );
+
+    return {
+      activeKeysCount: activeKeys.length,
+      averagePressDuration,
+      ...(longestPress && { longestPressedKey: longestPress }),
     };
   }
 
@@ -783,6 +1020,9 @@ export class AudioManager {
    * Cleanup resources and stop all active sounds
    */
   destroy(): void {
+    // Clear all active key tracking and timeouts
+    this.clearActiveKeys();
+
     // Stop all active audio sources
     this.stopAllSounds();
 
