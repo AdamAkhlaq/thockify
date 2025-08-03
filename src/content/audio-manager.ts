@@ -18,6 +18,13 @@ export class AudioManager {
   private preloadingPromise: Promise<void> | null = null;
   private masterGainNode: GainNode | null = null;
   private readonly activeSourceNodes = new Set<AudioBufferSourceNode>();
+  private readonly audioBuffers = new Map<string, AudioBuffer>();
+  private preloadStartTime: number = 0;
+  private loadingStats = {
+    totalFiles: 0,
+    loadedFiles: 0,
+    failedFiles: 0,
+  };
 
   /**
    * Initialize the audio system with enhanced Web Audio API features
@@ -53,50 +60,166 @@ export class AudioManager {
   }
 
   /**
-   * Preload all sound files for press/release actions
+   * Preload all sound files for press/release actions with optimized buffer management
    */
   private async preloadSounds(): Promise<void> {
     if (!this.audioContext) throw new Error('Audio context not available');
 
-    this.preloadingPromise = (async () => {
-      const loadPromises: Promise<void>[] = [];
+    this.preloadStartTime = performance.now();
 
-      // Load press sounds
-      for (const [keyType, filename] of Object.entries(
-        PATHS.SOUND_FILES.press
-      )) {
-        loadPromises.push(this.loadSoundBuffer('press', keyType, filename));
-      }
+    // Reset loading stats
+    this.loadingStats = { totalFiles: 0, loadedFiles: 0, failedFiles: 0 };
 
-      // Load release sounds
-      for (const [keyType, filename] of Object.entries(
-        PATHS.SOUND_FILES.release
-      )) {
-        loadPromises.push(this.loadSoundBuffer('release', keyType, filename));
-      }
+    // Calculate total files to load
+    this.loadingStats.totalFiles =
+      Object.keys(PATHS.SOUND_FILES.press).length +
+      Object.keys(PATHS.SOUND_FILES.release).length;
 
-      await Promise.allSettled(loadPromises);
-      console.log('Audio buffers preloaded for press/release sounds');
-    })();
-
+    this.preloadingPromise = this.executePreloading();
     await this.preloadingPromise;
+
+    const loadTime = performance.now() - this.preloadStartTime;
+    console.log(
+      `Audio preloading completed in ${loadTime.toFixed(2)}ms - ` +
+        `Loaded: ${this.loadingStats.loadedFiles}/${this.loadingStats.totalFiles}, ` +
+        `Failed: ${this.loadingStats.failedFiles}`
+    );
+
+    // Validate we have essential sounds loaded
+    if (this.loadingStats.loadedFiles === 0) {
+      throw new Error('Failed to load any audio files');
+    }
   }
 
   /**
-   * Load individual sound buffer
+   * Execute the actual preloading with timeout and error handling
+   */
+  private async executePreloading(): Promise<void> {
+    const loadPromises: Promise<void>[] = [];
+
+    // Load press sounds with high priority
+    for (const [keyType, filename] of Object.entries(PATHS.SOUND_FILES.press)) {
+      loadPromises.push(
+        this.loadSoundBufferWithTimeout(
+          'press',
+          keyType,
+          filename,
+          AUDIO_CONFIG.PRELOAD_TIMEOUT
+        )
+      );
+    }
+
+    // Load release sounds with normal priority
+    for (const [keyType, filename] of Object.entries(
+      PATHS.SOUND_FILES.release
+    )) {
+      loadPromises.push(
+        this.loadSoundBufferWithTimeout(
+          'release',
+          keyType,
+          filename,
+          AUDIO_CONFIG.PRELOAD_TIMEOUT
+        )
+      );
+    }
+
+    // Wait for all loading attempts to complete (some may fail)
+    await Promise.allSettled(loadPromises);
+  }
+
+  /**
+   * Load individual sound buffer with timeout and improved error handling
+   */
+  private async loadSoundBufferWithTimeout(
+    action: SoundAction,
+    keyType: string,
+    filename: string,
+    timeoutMs: number
+  ): Promise<void> {
+    const bufferKey = `${action}:${keyType}`;
+
+    try {
+      // Create timeout promise
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        setTimeout(
+          () => reject(new Error(`Timeout loading ${bufferKey}`)),
+          timeoutMs
+        );
+      });
+
+      // Create loading promise
+      const loadingPromise = this.loadSoundBuffer(action, keyType, filename);
+
+      // Race between loading and timeout
+      await Promise.race([loadingPromise, timeoutPromise]);
+
+      this.loadingStats.loadedFiles++;
+      console.debug(`Successfully loaded ${bufferKey}`);
+    } catch (error) {
+      this.loadingStats.failedFiles++;
+      console.warn(`Failed to load ${bufferKey}:`, error);
+
+      // For critical sounds, try fallback to generic if available
+      if (keyType !== 'generic' && this.shouldUseFallback(action, keyType)) {
+        try {
+          await this.loadFallbackBuffer(action, keyType);
+          console.info(`Using fallback for ${bufferKey}`);
+        } catch (fallbackError) {
+          console.error(
+            `Fallback also failed for ${bufferKey}:`,
+            fallbackError
+          );
+        }
+      }
+    }
+  }
+
+  /**
+   * Load individual sound buffer (core loading logic)
    */
   private async loadSoundBuffer(
     action: SoundAction,
     keyType: string,
     filename: string
   ): Promise<void> {
-    try {
-      const url = chrome.runtime.getURL(`${PATHS.SOUNDS_DIR}/${filename}`);
-      const buffer = await loadAudioBuffer(this.audioContext!, url);
-      const bufferKey = `${action}:${keyType}`;
-      this.audioContext!.buffers!.set(bufferKey, buffer);
-    } catch (error) {
-      console.warn(`Failed to load ${action} sound for ${keyType}:`, error);
+    const url = chrome.runtime.getURL(`${PATHS.SOUNDS_DIR}/${filename}`);
+    const buffer = await loadAudioBuffer(this.audioContext!, url);
+    const bufferKey = `${action}:${keyType}`;
+
+    // Store in both the audio context and local buffer map
+    this.audioContext!.buffers!.set(bufferKey, buffer);
+    this.audioBuffers.set(bufferKey, buffer);
+  }
+
+  /**
+   * Check if fallback should be used for failed sound loading
+   */
+  private shouldUseFallback(action: SoundAction, keyType: string): boolean {
+    // Use fallback for special keys if generic sound is available
+    const genericKey = `${action}:generic`;
+    return (
+      ['backspace', 'enter', 'space'].includes(keyType) &&
+      !this.audioBuffers.has(`${action}:${keyType}`) &&
+      this.audioBuffers.has(genericKey)
+    );
+  }
+
+  /**
+   * Load fallback buffer (generic sound for specific key types)
+   */
+  private async loadFallbackBuffer(
+    action: SoundAction,
+    keyType: string
+  ): Promise<void> {
+    const genericKey = `${action}:generic`;
+    const fallbackKey = `${action}:${keyType}`;
+
+    const genericBuffer = this.audioBuffers.get(genericKey);
+    if (genericBuffer) {
+      // Use generic buffer as fallback
+      this.audioContext!.buffers!.set(fallbackKey, genericBuffer);
+      this.audioBuffers.set(fallbackKey, genericBuffer);
+      this.loadingStats.loadedFiles++;
     }
   }
 
@@ -129,7 +252,9 @@ export class AudioManager {
     }
 
     const bufferKey = `${action}:${keyType}`;
-    const buffer = this.audioContext.buffers?.get(bufferKey);
+    const buffer =
+      this.audioBuffers.get(bufferKey) ||
+      this.audioContext.buffers?.get(bufferKey);
     if (!buffer) {
       console.warn(
         `No audio buffer available for ${action} sound of ${keyType}`
@@ -173,10 +298,44 @@ export class AudioManager {
   }
 
   /**
-   * Check if audio system is ready
+   * Check if audio system is ready with buffer validation
    */
   isReady(): boolean {
-    return this.isInitialized && this.audioContext !== null;
+    const hasContext = this.isInitialized && this.audioContext !== null;
+    const hasBuffers = this.audioBuffers.size > 0;
+    const preloadingComplete =
+      this.preloadingPromise === null || this.loadingStats.loadedFiles > 0;
+
+    return hasContext && hasBuffers && preloadingComplete;
+  }
+
+  /**
+   * Get detailed preloading statistics
+   */
+  getPreloadingStats(): {
+    isComplete: boolean;
+    totalFiles: number;
+    loadedFiles: number;
+    failedFiles: number;
+    loadedBuffers: string[];
+    loadTimeMs?: number;
+  } {
+    const stats = {
+      isComplete: this.preloadingPromise === null,
+      totalFiles: this.loadingStats.totalFiles,
+      loadedFiles: this.loadingStats.loadedFiles,
+      failedFiles: this.loadingStats.failedFiles,
+      loadedBuffers: Array.from(this.audioBuffers.keys()),
+    };
+
+    if (this.preloadStartTime > 0) {
+      return {
+        ...stats,
+        loadTimeMs: performance.now() - this.preloadStartTime,
+      };
+    }
+
+    return stats;
   }
 
   /**
@@ -198,10 +357,18 @@ export class AudioManager {
       this.audioContext.context.close();
     }
 
+    // Clear buffer maps
+    this.audioBuffers.clear();
+    if (this.audioContext?.buffers) {
+      this.audioContext.buffers.clear();
+    }
+
     // Reset all properties
     this.audioContext = null;
     this.masterGainNode = null;
     this.isInitialized = false;
     this.preloadingPromise = null;
+    this.preloadStartTime = 0;
+    this.loadingStats = { totalFiles: 0, loadedFiles: 0, failedFiles: 0 };
   }
 }
