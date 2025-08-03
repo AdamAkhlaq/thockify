@@ -35,6 +35,10 @@ export class AudioManager {
   private readonly maxPoolSize: number = AUDIO_CONFIG.MAX_CONCURRENT_SOUNDS;
   private concurrentSoundsCount: number = 0;
 
+  // Key-specific sound mapping system
+  private readonly keyMappingConfig = new Map<string, KeyType>();
+  private readonly fallbackMapping = new Map<KeyType, KeyType>();
+
   /**
    * Initialize the audio system with enhanced Web Audio API features
    */
@@ -62,6 +66,9 @@ export class AudioManager {
       // Initialize buffer pools
       this.initializeBufferPools();
 
+      // Initialize key-specific sound mapping
+      this.initializeKeyMapping();
+
       await this.preloadSounds();
       this.isInitialized = true;
       console.log(
@@ -88,6 +95,130 @@ export class AudioManager {
     console.debug(
       `Initialized buffer pools with ${this.gainNodePool.size} gain nodes`
     );
+  }
+
+  /**
+   * Initialize key-specific sound mapping configuration
+   */
+  private initializeKeyMapping(): void {
+    // Clear existing mappings
+    this.keyMappingConfig.clear();
+    this.fallbackMapping.clear();
+
+    // Space key mappings
+    this.keyMappingConfig.set(' ', 'space');
+    this.keyMappingConfig.set('Space', 'space');
+    this.keyMappingConfig.set('space', 'space');
+
+    // Enter key mappings
+    this.keyMappingConfig.set('Enter', 'enter');
+    this.keyMappingConfig.set('enter', 'enter');
+    this.keyMappingConfig.set('\n', 'enter');
+    this.keyMappingConfig.set('\r', 'enter');
+
+    // Backspace key mappings
+    this.keyMappingConfig.set('Backspace', 'backspace');
+    this.keyMappingConfig.set('backspace', 'backspace');
+
+    // Tab key (maps to generic)
+    this.keyMappingConfig.set('Tab', 'generic');
+    this.keyMappingConfig.set('tab', 'generic');
+
+    // Escape key (maps to generic)
+    this.keyMappingConfig.set('Escape', 'generic');
+    this.keyMappingConfig.set('escape', 'generic');
+
+    // Modifier keys (map to generic)
+    const modifierKeys = [
+      'Shift',
+      'Control',
+      'Alt',
+      'Meta',
+      'CapsLock',
+      'NumLock',
+      'ScrollLock',
+      'shift',
+      'control',
+      'alt',
+      'meta',
+      'capslock',
+      'numlock',
+      'scrolllock',
+    ];
+    modifierKeys.forEach(key => this.keyMappingConfig.set(key, 'generic'));
+
+    // Function keys (map to generic)
+    for (let i = 1; i <= 12; i++) {
+      this.keyMappingConfig.set(`F${i}`, 'generic');
+      this.keyMappingConfig.set(`f${i}`, 'generic');
+    }
+
+    // Arrow keys (map to generic)
+    const arrowKeys = ['ArrowUp', 'ArrowDown', 'ArrowLeft', 'ArrowRight'];
+    arrowKeys.forEach(key => this.keyMappingConfig.set(key, 'generic'));
+
+    // Set up fallback hierarchy: specific -> generic
+    this.fallbackMapping.set('backspace', 'generic');
+    this.fallbackMapping.set('enter', 'generic');
+    this.fallbackMapping.set('space', 'generic');
+
+    console.debug(
+      'Key mapping configuration initialized with comprehensive key support'
+    );
+  }
+
+  /**
+   * Classify key based on event properties with enhanced mapping
+   */
+  classifyKey(event: KeyboardEvent): KeyType {
+    const key = event.key;
+    const code = event.code;
+
+    // First try direct key mapping
+    if (this.keyMappingConfig.has(key)) {
+      return this.keyMappingConfig.get(key)!;
+    }
+
+    // Try code mapping
+    if (this.keyMappingConfig.has(code)) {
+      return this.keyMappingConfig.get(code)!;
+    }
+
+    // Special case handling for edge cases
+    if (key.length === 1) {
+      // Single character keys (letters, numbers, symbols) are generic
+      return 'generic';
+    }
+
+    // Default fallback
+    return 'generic';
+  }
+
+  /**
+   * Get fallback key type for a given key type
+   */
+  getFallbackKeyType(keyType: KeyType): KeyType | null {
+    return this.fallbackMapping.get(keyType) || null;
+  }
+
+  /**
+   * Get available key types for sound mapping
+   */
+  getAvailableKeyTypes(): KeyType[] {
+    return ['generic', 'backspace', 'enter', 'space'];
+  }
+
+  /**
+   * Check if a specific key type has loaded sounds
+   */
+  hasLoadedSounds(keyType: KeyType): { press: boolean; release: boolean } {
+    const pressKey = `press:${keyType}`;
+    const releaseKey = `release:${keyType}`;
+
+    return {
+      press: this.audioBuffers.has(pressKey),
+      release: this.audioBuffers.has(releaseKey),
+    };
   }
 
   /**
@@ -331,6 +462,24 @@ export class AudioManager {
   async playKeySound(
     keyType: KeyType,
     action: SoundAction,
+    volume?: number
+  ): Promise<void>;
+
+  /**
+   * Play sound based on keyboard event with automatic key classification
+   */
+  async playKeySound(
+    event: KeyboardEvent,
+    action: SoundAction,
+    volume?: number
+  ): Promise<void>;
+
+  /**
+   * Play sound implementation with method overloading support
+   */
+  async playKeySound(
+    keyTypeOrEvent: KeyType | KeyboardEvent,
+    action: SoundAction,
     volume: number = 1.0
   ): Promise<void> {
     if (!this.isInitialized || !this.audioContext || !this.masterGainNode) {
@@ -349,6 +498,14 @@ export class AudioManager {
       return;
     }
 
+    // Determine key type
+    let keyType: KeyType;
+    if (typeof keyTypeOrEvent === 'string') {
+      keyType = keyTypeOrEvent;
+    } else {
+      keyType = this.classifyKey(keyTypeOrEvent);
+    }
+
     // Wait for preloading to complete if still in progress
     if (this.preloadingPromise) {
       await this.preloadingPromise;
@@ -364,13 +521,11 @@ export class AudioManager {
       }
     }
 
-    const bufferKey = `${action}:${keyType}`;
-    const buffer =
-      this.audioBuffers.get(bufferKey) ||
-      this.audioContext.buffers?.get(bufferKey);
+    // Try to get the audio buffer, with fallback support
+    const buffer = this.getAudioBufferWithFallback(keyType, action);
     if (!buffer) {
       console.warn(
-        `No audio buffer available for ${action} sound of ${keyType}`
+        `No audio buffer available for ${action} sound of ${keyType} (including fallbacks)`
       );
       return;
     }
@@ -418,6 +573,41 @@ export class AudioManager {
     } catch (error) {
       console.error(`Failed to play ${action} sound for ${keyType}:`, error);
     }
+  }
+
+  /**
+   * Get audio buffer with fallback support
+   */
+  private getAudioBufferWithFallback(
+    keyType: KeyType,
+    action: SoundAction
+  ): AudioBuffer | null {
+    const bufferKey = `${action}:${keyType}`;
+
+    // Try direct buffer first
+    let buffer =
+      this.audioBuffers.get(bufferKey) ||
+      this.audioContext?.buffers?.get(bufferKey);
+
+    if (buffer) {
+      return buffer;
+    }
+
+    // Try fallback if available
+    const fallbackKeyType = this.getFallbackKeyType(keyType);
+    if (fallbackKeyType) {
+      const fallbackKey = `${action}:${fallbackKeyType}`;
+      buffer =
+        this.audioBuffers.get(fallbackKey) ||
+        this.audioContext?.buffers?.get(fallbackKey);
+
+      if (buffer) {
+        console.debug(`Using fallback ${fallbackKeyType} sound for ${keyType}`);
+        return buffer;
+      }
+    }
+
+    return null;
   }
 
   /**
@@ -610,6 +800,10 @@ export class AudioManager {
     // Clear buffer pools
     this.sourceNodePool.clear();
     this.gainNodePool.clear();
+
+    // Clear key mapping configurations
+    this.keyMappingConfig.clear();
+    this.fallbackMapping.clear();
 
     // Reset all properties including volume state and pooling counters
     this.audioContext = null;
