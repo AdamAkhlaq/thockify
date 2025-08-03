@@ -29,6 +29,12 @@ export class AudioManager {
   private isMuted: boolean = false;
   private volumeBeforeMute: number = AUDIO_CONFIG.DEFAULT_VOLUME;
 
+  // Audio buffer pooling system
+  private readonly sourceNodePool = new Set<AudioBufferSourceNode>();
+  private readonly gainNodePool = new Set<GainNode>();
+  private readonly maxPoolSize: number = AUDIO_CONFIG.MAX_CONCURRENT_SOUNDS;
+  private concurrentSoundsCount: number = 0;
+
   /**
    * Initialize the audio system with enhanced Web Audio API features
    */
@@ -53,13 +59,106 @@ export class AudioManager {
         await this.audioContext.context.resume();
       }
 
+      // Initialize buffer pools
+      this.initializeBufferPools();
+
       await this.preloadSounds();
       this.isInitialized = true;
-      console.log('Thockify AudioManager initialized with Web Audio API');
+      console.log(
+        'Thockify AudioManager initialized with Web Audio API and buffer pooling'
+      );
     } catch (error) {
       console.error('Failed to initialize AudioManager:', error);
       throw error;
     }
+  }
+
+  /**
+   * Initialize buffer pools for efficient resource management
+   */
+  private initializeBufferPools(): void {
+    if (!this.audioContext?.context) return;
+
+    // Pre-create gain nodes for the pool
+    for (let i = 0; i < Math.min(this.maxPoolSize, 5); i++) {
+      const gainNode = this.audioContext.context.createGain();
+      this.gainNodePool.add(gainNode);
+    }
+
+    console.debug(
+      `Initialized buffer pools with ${this.gainNodePool.size} gain nodes`
+    );
+  }
+
+  /**
+   * Acquire a gain node from the pool or create a new one
+   */
+  private acquireGainNode(): GainNode | null {
+    if (!this.audioContext?.context) return null;
+
+    let gainNode = this.gainNodePool.values().next().value;
+    if (gainNode) {
+      this.gainNodePool.delete(gainNode);
+      // Reset the gain node state
+      gainNode.gain.value = 1.0;
+      gainNode.disconnect();
+    } else {
+      // Create new gain node if pool is empty
+      gainNode = this.audioContext.context.createGain();
+    }
+
+    return gainNode;
+  }
+
+  /**
+   * Release a gain node back to the pool
+   */
+  private releaseGainNode(gainNode: GainNode): void {
+    if (this.gainNodePool.size < this.maxPoolSize) {
+      // Reset state and return to pool
+      gainNode.gain.value = 1.0;
+      gainNode.disconnect();
+      this.gainNodePool.add(gainNode);
+    }
+    // If pool is full, let it be garbage collected
+  }
+
+  /**
+   * Check if we can play more concurrent sounds
+   */
+  private canPlayConcurrentSound(): boolean {
+    return this.concurrentSoundsCount < this.maxPoolSize;
+  }
+
+  /**
+   * Increment concurrent sounds counter
+   */
+  private incrementConcurrentSounds(): void {
+    this.concurrentSoundsCount++;
+  }
+
+  /**
+   * Decrement concurrent sounds counter
+   */
+  private decrementConcurrentSounds(): void {
+    this.concurrentSoundsCount = Math.max(0, this.concurrentSoundsCount - 1);
+  }
+
+  /**
+   * Get current concurrent sounds statistics
+   */
+  getConcurrentSoundsStats(): {
+    active: number;
+    maxAllowed: number;
+    pooledGainNodes: number;
+    poolUtilization: number;
+  } {
+    return {
+      active: this.concurrentSoundsCount,
+      maxAllowed: this.maxPoolSize,
+      pooledGainNodes: this.gainNodePool.size,
+      poolUtilization: this.concurrentSoundsCount / this.maxPoolSize,
+    };
   }
 
   /**
@@ -227,7 +326,7 @@ export class AudioManager {
   }
 
   /**
-   * Play sound for specific key type and action with enhanced volume control
+   * Play sound for specific key type and action with enhanced volume control and buffer pooling
    */
   async playKeySound(
     keyType: KeyType,
@@ -241,6 +340,12 @@ export class AudioManager {
 
     // Skip playback if muted
     if (this.isMuted) {
+      return;
+    }
+
+    // Check concurrent sound limits
+    if (!this.canPlayConcurrentSound()) {
+      console.debug('Maximum concurrent sounds reached, skipping playback');
       return;
     }
 
@@ -271,17 +376,22 @@ export class AudioManager {
     }
 
     try {
-      // Create and configure audio source
+      // Create audio source (cannot be pooled as they're single-use)
       const source = this.audioContext.context!.createBufferSource();
       source.buffer = buffer;
 
-      // Create sound-specific gain node for individual volume control
-      const soundGainNode = this.audioContext.context!.createGain();
+      // Acquire gain nodes from pool
+      const soundGainNode = this.acquireGainNode();
+      const keyTypeGainNode = this.acquireGainNode();
+
+      if (!soundGainNode || !keyTypeGainNode) {
+        console.warn('Failed to acquire gain nodes from pool');
+        return;
+      }
+
+      // Configure gain nodes
       const clampedVolume = Math.max(0, Math.min(1, volume));
       soundGainNode.gain.value = clampedVolume;
-
-      // Create additional gain node for key-type specific volume adjustments
-      const keyTypeGainNode = this.audioContext.context!.createGain();
       keyTypeGainNode.gain.value = this.getKeyTypeVolumeMultiplier(keyType);
 
       // Connect audio graph: source -> soundGain -> keyTypeGain -> masterGain -> destination
@@ -289,10 +399,18 @@ export class AudioManager {
       soundGainNode.connect(keyTypeGainNode);
       keyTypeGainNode.connect(this.masterGainNode);
 
-      // Track active source for cleanup
+      // Track active source and increment counter
       this.activeSourceNodes.add(source);
+      this.incrementConcurrentSounds();
+
+      // Set up cleanup when sound ends
       source.onended = () => {
         this.activeSourceNodes.delete(source);
+        this.decrementConcurrentSounds();
+
+        // Return gain nodes to pool
+        this.releaseGainNode(soundGainNode);
+        this.releaseGainNode(keyTypeGainNode);
       };
 
       // Play the sound
@@ -415,6 +533,22 @@ export class AudioManager {
   }
 
   /**
+   * Stop all currently playing sounds
+   */
+  stopAllSounds(): void {
+    this.activeSourceNodes.forEach(source => {
+      try {
+        source.stop();
+      } catch (error) {
+        // Source may already be stopped
+      }
+    });
+    this.activeSourceNodes.clear();
+    this.concurrentSoundsCount = 0;
+    console.debug('All sounds stopped');
+  }
+
+  /**
    * Check if audio system is ready with buffer validation
    */
   isReady(): boolean {
@@ -460,14 +594,7 @@ export class AudioManager {
    */
   destroy(): void {
     // Stop all active audio sources
-    this.activeSourceNodes.forEach(source => {
-      try {
-        source.stop();
-      } catch (error) {
-        // Source may already be stopped
-      }
-    });
-    this.activeSourceNodes.clear();
+    this.stopAllSounds();
 
     // Close audio context
     if (this.audioContext?.context) {
@@ -480,7 +607,11 @@ export class AudioManager {
       this.audioContext.buffers.clear();
     }
 
-    // Reset all properties including volume state
+    // Clear buffer pools
+    this.sourceNodePool.clear();
+    this.gainNodePool.clear();
+
+    // Reset all properties including volume state and pooling counters
     this.audioContext = null;
     this.masterGainNode = null;
     this.isInitialized = false;
@@ -490,5 +621,6 @@ export class AudioManager {
     this.currentVolume = AUDIO_CONFIG.DEFAULT_VOLUME;
     this.isMuted = false;
     this.volumeBeforeMute = AUDIO_CONFIG.DEFAULT_VOLUME;
+    this.concurrentSoundsCount = 0;
   }
 }
