@@ -25,6 +25,9 @@ export class AudioManager {
     loadedFiles: 0,
     failedFiles: 0,
   };
+  private currentVolume: number = AUDIO_CONFIG.DEFAULT_VOLUME;
+  private isMuted: boolean = false;
+  private volumeBeforeMute: number = AUDIO_CONFIG.DEFAULT_VOLUME;
 
   /**
    * Initialize the audio system with enhanced Web Audio API features
@@ -224,7 +227,7 @@ export class AudioManager {
   }
 
   /**
-   * Play sound for specific key type and action (press/release)
+   * Play sound for specific key type and action with enhanced volume control
    */
   async playKeySound(
     keyType: KeyType,
@@ -233,6 +236,11 @@ export class AudioManager {
   ): Promise<void> {
     if (!this.isInitialized || !this.audioContext || !this.masterGainNode) {
       console.warn('AudioManager not initialized');
+      return;
+    }
+
+    // Skip playback if muted
+    if (this.isMuted) {
       return;
     }
 
@@ -267,13 +275,19 @@ export class AudioManager {
       const source = this.audioContext.context!.createBufferSource();
       source.buffer = buffer;
 
-      // Create individual gain node for this sound
-      const gainNode = this.audioContext.context!.createGain();
-      gainNode.gain.value = Math.max(0, Math.min(1, volume));
+      // Create sound-specific gain node for individual volume control
+      const soundGainNode = this.audioContext.context!.createGain();
+      const clampedVolume = Math.max(0, Math.min(1, volume));
+      soundGainNode.gain.value = clampedVolume;
 
-      // Connect: source -> gainNode -> masterGainNode -> destination
-      source.connect(gainNode);
-      gainNode.connect(this.masterGainNode);
+      // Create additional gain node for key-type specific volume adjustments
+      const keyTypeGainNode = this.audioContext.context!.createGain();
+      keyTypeGainNode.gain.value = this.getKeyTypeVolumeMultiplier(keyType);
+
+      // Connect audio graph: source -> soundGain -> keyTypeGain -> masterGain -> destination
+      source.connect(soundGainNode);
+      soundGainNode.connect(keyTypeGainNode);
+      keyTypeGainNode.connect(this.masterGainNode);
 
       // Track active source for cleanup
       this.activeSourceNodes.add(source);
@@ -289,12 +303,115 @@ export class AudioManager {
   }
 
   /**
-   * Set master volume for all sounds
+   * Get volume multiplier for different key types
    */
-  setVolume(volume: number): void {
-    if (this.masterGainNode) {
-      this.masterGainNode.gain.value = Math.max(0, Math.min(1, volume));
+  private getKeyTypeVolumeMultiplier(keyType: KeyType): number {
+    // Different key types can have different volume levels for realism
+    switch (keyType) {
+      case 'space':
+        return 1.1; // Space bar slightly louder
+      case 'enter':
+        return 1.05; // Enter slightly louder
+      case 'backspace':
+        return 0.95; // Backspace slightly quieter
+      case 'generic':
+      default:
+        return 1.0; // Normal volume
     }
+  }
+
+  /**
+   * Set master volume with smooth ramping and mute state management
+   */
+  setVolume(volume: number, rampTimeMs: number = 0): void {
+    const clampedVolume = Math.max(0, Math.min(1, volume));
+    this.currentVolume = clampedVolume;
+
+    if (!this.masterGainNode) {
+      console.warn('Master gain node not available');
+      return;
+    }
+
+    try {
+      // Handle mute state
+      if (clampedVolume === 0 && !this.isMuted) {
+        this.volumeBeforeMute =
+          this.currentVolume > 0 ? this.currentVolume : this.volumeBeforeMute;
+        this.isMuted = true;
+      } else if (clampedVolume > 0 && this.isMuted) {
+        this.isMuted = false;
+      }
+
+      const targetVolume = this.isMuted ? 0 : clampedVolume;
+
+      if (rampTimeMs > 0 && this.audioContext?.context) {
+        // Smooth volume ramping
+        const currentTime = this.audioContext.context.currentTime;
+        this.masterGainNode.gain.cancelScheduledValues(currentTime);
+        this.masterGainNode.gain.setValueAtTime(
+          this.masterGainNode.gain.value,
+          currentTime
+        );
+        this.masterGainNode.gain.linearRampToValueAtTime(
+          targetVolume,
+          currentTime + rampTimeMs / 1000
+        );
+      } else {
+        // Immediate volume change
+        this.masterGainNode.gain.value = targetVolume;
+      }
+    } catch (error) {
+      console.error('Failed to set volume:', error);
+    }
+  }
+
+  /**
+   * Get current volume level
+   */
+  getVolume(): number {
+    return this.currentVolume;
+  }
+
+  /**
+   * Toggle mute state
+   */
+  toggleMute(): boolean {
+    if (this.isMuted) {
+      this.setVolume(this.volumeBeforeMute);
+    } else {
+      this.volumeBeforeMute = this.currentVolume;
+      this.setVolume(0);
+    }
+    return this.isMuted;
+  }
+
+  /**
+   * Set mute state explicitly
+   */
+  setMute(muted: boolean): void {
+    if (muted && !this.isMuted) {
+      this.volumeBeforeMute = this.currentVolume;
+      this.setVolume(0);
+    } else if (!muted && this.isMuted) {
+      this.setVolume(this.volumeBeforeMute);
+    }
+  }
+
+  /**
+   * Check if currently muted
+   */
+  isMutedState(): boolean {
+    return this.isMuted;
+  }
+
+  /**
+   * Fade volume in/out with smooth ramping
+   */
+  fadeVolume(
+    targetVolume: number,
+    durationMs: number = AUDIO_CONFIG.VOLUME_FADE_DURATION * 1000
+  ): void {
+    this.setVolume(targetVolume, durationMs);
   }
 
   /**
@@ -363,12 +480,15 @@ export class AudioManager {
       this.audioContext.buffers.clear();
     }
 
-    // Reset all properties
+    // Reset all properties including volume state
     this.audioContext = null;
     this.masterGainNode = null;
     this.isInitialized = false;
     this.preloadingPromise = null;
     this.preloadStartTime = 0;
     this.loadingStats = { totalFiles: 0, loadedFiles: 0, failedFiles: 0 };
+    this.currentVolume = AUDIO_CONFIG.DEFAULT_VOLUME;
+    this.isMuted = false;
+    this.volumeBeforeMute = AUDIO_CONFIG.DEFAULT_VOLUME;
   }
 }
