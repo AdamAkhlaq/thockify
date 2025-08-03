@@ -67,6 +67,25 @@ export class AudioManager {
   private lastErrorTime: number = 0;
   private readonly errorThrottleTime: number = 5000; // 5 seconds between error reports
 
+  // Latency testing and performance monitoring
+  private readonly performanceStats = {
+    keyPressToSoundStart: [] as number[],
+    audioProcessingTime: [] as number[],
+    bufferCreationTime: [] as number[],
+    totalMeasurements: 0,
+    averageLatency: 0,
+    minLatency: Infinity,
+    maxLatency: 0,
+  };
+  private isLatencyTestMode = false;
+  private latencyTestResults: {
+    timestamp: number;
+    keyToSoundLatency: number;
+    audioContextBaseLatency: number;
+    audioContextOutputLatency: number;
+    processingTime: number;
+  }[] = [];
+
   /**
    * Initialize the Audio Manager with browser compatibility checks
    */
@@ -557,6 +576,196 @@ export class AudioManager {
    */
   getBrowserCompatibility(): ReturnType<typeof this.checkBrowserCompatibility> {
     return this.checkBrowserCompatibility();
+  }
+
+  /**
+   * Enable latency test mode for performance measurement
+   */
+  enableLatencyTesting(duration: number = 30000): void {
+    this.isLatencyTestMode = true;
+    this.latencyTestResults = [];
+    this.performanceStats.keyPressToSoundStart = [];
+    this.performanceStats.audioProcessingTime = [];
+    this.performanceStats.totalMeasurements = 0;
+
+    console.log(`🔬 Latency testing enabled for ${duration}ms`);
+    console.log('Start typing to measure audio latency...');
+
+    // Auto-disable after duration
+    setTimeout(() => {
+      this.disableLatencyTesting();
+    }, duration);
+  }
+
+  /**
+   * Disable latency test mode and output results
+   */
+  disableLatencyTesting(): {
+    averageLatency: number;
+    minLatency: number;
+    maxLatency: number;
+    standardDeviation: number;
+    totalMeasurements: number;
+    audioContextBaseLatency: number;
+    audioContextOutputLatency: number;
+    meetsRequirement: boolean;
+    percentile95: number;
+  } | null {
+    if (!this.isLatencyTestMode) return null;
+
+    this.isLatencyTestMode = false;
+    const results = this.analyzeLatencyResults();
+
+    console.log('🎯 Latency Test Results:');
+    console.log(`Average Latency: ${results.averageLatency.toFixed(2)}ms`);
+    console.log(`Minimum Latency: ${results.minLatency.toFixed(2)}ms`);
+    console.log(`Maximum Latency: ${results.maxLatency.toFixed(2)}ms`);
+    console.log(
+      `Standard Deviation: ${results.standardDeviation.toFixed(2)}ms`
+    );
+    console.log(`Total Measurements: ${results.totalMeasurements}`);
+    console.log(
+      `Audio Context Base Latency: ${results.audioContextBaseLatency.toFixed(2)}ms`
+    );
+    console.log(
+      `Audio Context Output Latency: ${results.audioContextOutputLatency.toFixed(2)}ms`
+    );
+    console.log(
+      `Meets <10ms Requirement: ${results.meetsRequirement ? '✅' : '❌'}`
+    );
+
+    if (!results.meetsRequirement) {
+      console.warn(
+        '⚠️  Latency exceeds 10ms requirement. Consider optimization.'
+      );
+    }
+
+    return results;
+  }
+
+  /**
+   * Analyze latency test results
+   */
+  private analyzeLatencyResults(): {
+    averageLatency: number;
+    minLatency: number;
+    maxLatency: number;
+    standardDeviation: number;
+    totalMeasurements: number;
+    audioContextBaseLatency: number;
+    audioContextOutputLatency: number;
+    meetsRequirement: boolean;
+    percentile95: number;
+    rawResults: Array<{
+      timestamp: number;
+      keyToSoundLatency: number;
+      audioContextBaseLatency: number;
+      audioContextOutputLatency: number;
+      processingTime: number;
+    }>;
+  } {
+    if (this.latencyTestResults.length === 0) {
+      return {
+        averageLatency: 0,
+        minLatency: 0,
+        maxLatency: 0,
+        standardDeviation: 0,
+        totalMeasurements: 0,
+        audioContextBaseLatency: 0,
+        audioContextOutputLatency: 0,
+        meetsRequirement: false,
+        percentile95: 0,
+        rawResults: [],
+      };
+    }
+
+    const latencies = this.latencyTestResults.map(r => r.keyToSoundLatency);
+    const total = latencies.reduce((sum, lat) => sum + lat, 0);
+    const average = total / latencies.length;
+    const min = Math.min(...latencies);
+    const max = Math.max(...latencies);
+
+    // Calculate standard deviation
+    const variance =
+      latencies.reduce((sum, lat) => sum + Math.pow(lat - average, 2), 0) /
+      latencies.length;
+    const standardDeviation = Math.sqrt(variance);
+
+    // Calculate 95th percentile
+    const sorted = [...latencies].sort((a, b) => a - b);
+    const p95Index = Math.floor(0.95 * sorted.length);
+    const percentile95 = sorted[p95Index] || 0;
+
+    // Get audio context latencies (they should be consistent)
+    const audioContextBaseLatency =
+      this.latencyTestResults[0]?.audioContextBaseLatency || 0;
+    const audioContextOutputLatency =
+      this.latencyTestResults[0]?.audioContextOutputLatency || 0;
+
+    return {
+      averageLatency: average,
+      minLatency: min,
+      maxLatency: max,
+      standardDeviation,
+      totalMeasurements: latencies.length,
+      audioContextBaseLatency,
+      audioContextOutputLatency,
+      meetsRequirement: percentile95 < 10, // 95% of measurements should be under 10ms
+      percentile95,
+      rawResults: this.latencyTestResults,
+    };
+  }
+
+  /**
+   * Record a latency measurement during testing
+   */
+  private recordLatencyMeasurement(
+    startTime: number,
+    latency: number,
+    keyType: KeyType,
+    action: SoundAction
+  ): void {
+    const audioContextBaseLatency =
+      this.audioContext?.context?.baseLatency || 0;
+    const audioContextOutputLatency =
+      this.audioContext?.context?.outputLatency || 0;
+
+    // Record in latency test results
+    this.latencyTestResults.push({
+      timestamp: startTime,
+      keyToSoundLatency: latency,
+      audioContextBaseLatency: audioContextBaseLatency * 1000, // Convert to ms
+      audioContextOutputLatency: audioContextOutputLatency * 1000, // Convert to ms
+      processingTime:
+        latency - (audioContextBaseLatency + audioContextOutputLatency) * 1000,
+    });
+
+    // Update performance stats
+    this.performanceStats.keyPressToSoundStart.push(latency);
+    this.performanceStats.totalMeasurements++;
+
+    // Update running statistics
+    if (latency < this.performanceStats.minLatency) {
+      this.performanceStats.minLatency = latency;
+    }
+    if (latency > this.performanceStats.maxLatency) {
+      this.performanceStats.maxLatency = latency;
+    }
+
+    // Calculate running average
+    const total = this.performanceStats.keyPressToSoundStart.reduce(
+      (sum, lat) => sum + lat,
+      0
+    );
+    this.performanceStats.averageLatency =
+      total / this.performanceStats.keyPressToSoundStart.length;
+
+    // Log real-time latency if verbose mode is on
+    if (this.performanceStats.totalMeasurements % 10 === 0) {
+      console.log(
+        `🔍 Latency Sample #${this.performanceStats.totalMeasurements}: ${latency.toFixed(2)}ms (${keyType} ${action})`
+      );
+    }
   }
 
   /**
@@ -1183,6 +1392,9 @@ export class AudioManager {
     action: SoundAction,
     volume: number = 1.0
   ): Promise<void> {
+    // Start latency measurement
+    const startTime = performance.now();
+
     if (!this.isInitialized || !this.audioContext || !this.masterGainNode) {
       console.warn('AudioManager not initialized');
       return;
@@ -1271,6 +1483,13 @@ export class AudioManager {
 
       // Play the sound
       source.start(0);
+
+      // Record latency measurement if in test mode
+      if (this.isLatencyTestMode) {
+        const endTime = performance.now();
+        const latency = endTime - startTime;
+        this.recordLatencyMeasurement(startTime, latency, keyType, action);
+      }
     } catch (error) {
       console.error(`Failed to play ${action} sound for ${keyType}:`, error);
     }

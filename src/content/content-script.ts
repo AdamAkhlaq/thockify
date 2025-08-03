@@ -62,6 +62,37 @@ class ThockifyContentScript {
 
       this.isInitialized = true;
       console.log('Thockify content script initialized');
+
+      // Expose latency testing to console for debugging
+      (window as any).thockify = {
+        startLatencyTest: (duration = 30000) => {
+          if (this.audioManager) {
+            this.audioManager.enableLatencyTesting(duration);
+          } else {
+            console.error('AudioManager not available');
+          }
+        },
+        stopLatencyTest: () => {
+          if (this.audioManager) {
+            return this.audioManager.disableLatencyTesting();
+          } else {
+            console.error('AudioManager not available');
+            return null;
+          }
+        },
+        getCompatibility: () => {
+          if (this.audioManager) {
+            return this.audioManager.getBrowserCompatibility();
+          } else {
+            console.error('AudioManager not available');
+            return null;
+          }
+        },
+      };
+
+      console.log(
+        '🔧 Latency testing available via: thockify.startLatencyTest(), thockify.stopLatencyTest()'
+      );
     } catch (error) {
       console.error('Failed to initialize Thockify content script:', error);
     }
