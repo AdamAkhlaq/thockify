@@ -3,8 +3,8 @@
  * Handles extension lifecycle, settings, and keyboard shortcuts
  */
 
-import { StorageManager } from '../utils/storage.js';
-import { MESSAGE_TYPES } from '../utils/constants.js';
+import { StorageManager } from '../utils/storage';
+import { MESSAGE_TYPES } from '../utils/constants';
 
 // Extension installation handler
 chrome.runtime.onInstalled.addListener(async details => {

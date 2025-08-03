@@ -9,8 +9,8 @@ import {
   SoundAction,
   createAudioContext,
   loadAudioBuffer,
-} from '../utils/audio-utils.js';
-import { PATHS, AUDIO_CONFIG } from '../utils/constants.js';
+} from '../utils/audio-utils';
+import { PATHS, AUDIO_CONFIG } from '../utils/constants';
 
 export class AudioManager {
   private audioContext: ThockifyAudioContext | null = null;
@@ -54,12 +54,72 @@ export class AudioManager {
   private readonly maxKeyHoldTime: number = 5000; // Auto-release after 5 seconds
   private readonly repeatKeyThrottle: number = 16; // ~60fps throttling for repeat events
 
+  // Error handling and recovery system
+  private readonly errorCounts = {
+    audioContext: 0,
+    playback: 0,
+    loading: 0,
+    timeout: 0,
+  };
+  private readonly maxRetries: number = 3;
+  private readonly retryDelay: number = 1000; // 1 second
+  private isRecovering: boolean = false;
+  private lastErrorTime: number = 0;
+  private readonly errorThrottleTime: number = 5000; // 5 seconds between error reports
+
   /**
-   * Initialize the audio system with enhanced Web Audio API features
+   * Initialize the audio system with enhanced Web Audio API features and error handling
    */
   async initialize(): Promise<void> {
     if (this.isInitialized) return;
 
+    let retryCount = 0;
+    const maxInitRetries = this.maxRetries;
+
+    while (retryCount < maxInitRetries) {
+      try {
+        // Reset recovery state
+        this.isRecovering = false;
+
+        // Create audio context with error handling
+        await this.initializeAudioContext();
+
+        // Initialize buffer pools
+        this.initializeBufferPools();
+
+        // Initialize key-specific sound mapping
+        this.initializeKeyMapping();
+
+        // Preload sounds with retry logic
+        await this.preloadSounds();
+
+        this.isInitialized = true;
+        console.log(
+          'Thockify AudioManager initialized with Web Audio API and buffer pooling'
+        );
+        return;
+      } catch (error) {
+        retryCount++;
+        this.handleInitializationError(error, retryCount, maxInitRetries);
+
+        if (retryCount < maxInitRetries) {
+          console.log(
+            `Retrying initialization in ${this.retryDelay}ms... (${retryCount}/${maxInitRetries})`
+          );
+          await this.delay(this.retryDelay);
+        }
+      }
+    }
+
+    throw new Error(
+      `Failed to initialize AudioManager after ${maxInitRetries} attempts`
+    );
+  }
+
+  /**
+   * Initialize audio context with comprehensive error handling
+   */
+  private async initializeAudioContext(): Promise<void> {
     try {
       // Create audio context with optimized settings
       this.audioContext = createAudioContext();
@@ -68,31 +128,187 @@ export class AudioManager {
         throw new Error('Failed to create audio context');
       }
 
+      // Set up error handling for audio context
+      this.setupAudioContextErrorHandling();
+
       // Create master gain node for global volume control
       this.masterGainNode = this.audioContext.context.createGain();
       this.masterGainNode.gain.value = AUDIO_CONFIG.DEFAULT_VOLUME;
       this.masterGainNode.connect(this.audioContext.context.destination);
 
       // Resume audio context if suspended (required for autoplay policies)
-      if (this.audioContext.context.state === 'suspended') {
-        await this.audioContext.context.resume();
-      }
-
-      // Initialize buffer pools
-      this.initializeBufferPools();
-
-      // Initialize key-specific sound mapping
-      this.initializeKeyMapping();
-
-      await this.preloadSounds();
-      this.isInitialized = true;
-      console.log(
-        'Thockify AudioManager initialized with Web Audio API and buffer pooling'
-      );
+      await this.ensureAudioContextResumed();
     } catch (error) {
-      console.error('Failed to initialize AudioManager:', error);
-      throw error;
+      this.incrementErrorCount('audioContext');
+      throw new Error(
+        `Audio context initialization failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
     }
+  }
+
+  /**
+   * Set up error handling for audio context
+   */
+  private setupAudioContextErrorHandling(): void {
+    if (!this.audioContext?.context) return;
+
+    // Handle audio context state changes
+    this.audioContext.context.addEventListener('statechange', () => {
+      if (this.audioContext?.context) {
+        console.debug(
+          `Audio context state changed to: ${this.audioContext.context.state}`
+        );
+
+        if (this.audioContext.context.state === 'closed') {
+          this.handleAudioContextClosed();
+        } else if (this.audioContext.context.state === 'suspended') {
+          this.handleAudioContextSuspended();
+        }
+      }
+    });
+  }
+
+  /**
+   * Handle audio context closed state
+   */
+  private handleAudioContextClosed(): void {
+    console.warn('Audio context was closed unexpectedly');
+    this.incrementErrorCount('audioContext');
+
+    if (!this.isRecovering) {
+      this.attemptAudioContextRecovery();
+    }
+  }
+
+  /**
+   * Handle audio context suspended state
+   */
+  private handleAudioContextSuspended(): void {
+    console.debug(
+      'Audio context is suspended - will resume on next user interaction'
+    );
+  }
+
+  /**
+   * Ensure audio context is resumed
+   */
+  private async ensureAudioContextResumed(): Promise<void> {
+    if (!this.audioContext?.context) return;
+
+    if (this.audioContext.context.state === 'suspended') {
+      try {
+        await this.audioContext.context.resume();
+        console.debug('Audio context resumed successfully');
+      } catch (error) {
+        console.warn('Failed to resume audio context:', error);
+        throw error;
+      }
+    }
+  }
+
+  /**
+   * Handle initialization errors with logging and reporting
+   */
+  private handleInitializationError(
+    error: unknown,
+    retryCount: number,
+    maxRetries: number
+  ): void {
+    const errorMessage =
+      error instanceof Error ? error.message : 'Unknown error';
+    console.error(
+      `AudioManager initialization failed (attempt ${retryCount}/${maxRetries}): ${errorMessage}`
+    );
+
+    this.incrementErrorCount('audioContext');
+    this.reportError('initialization', error);
+  }
+
+  /**
+   * Utility delay function for retry logic
+   */
+  private delay(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  /**
+   * Increment error count for a specific category
+   */
+  private incrementErrorCount(category: keyof typeof this.errorCounts): void {
+    this.errorCounts[category]++;
+  }
+
+  /**
+   * Report error with throttling to prevent spam
+   */
+  private reportError(type: string, error: unknown): void {
+    const currentTime = performance.now();
+
+    // Throttle error reporting
+    if (currentTime - this.lastErrorTime < this.errorThrottleTime) {
+      return;
+    }
+
+    this.lastErrorTime = currentTime;
+    const errorMessage =
+      error instanceof Error ? error.message : 'Unknown error';
+
+    console.error(`[AudioManager Error] ${type}: ${errorMessage}`, {
+      errorCounts: this.errorCounts,
+      timestamp: new Date().toISOString(),
+      isRecovering: this.isRecovering,
+    });
+  }
+
+  /**
+   * Attempt to recover audio context
+   */
+  private async attemptAudioContextRecovery(): Promise<void> {
+    if (this.isRecovering) return;
+
+    this.isRecovering = true;
+    console.log('Attempting audio context recovery...');
+
+    try {
+      // Clear existing context
+      this.audioContext = null;
+      this.masterGainNode = null;
+
+      // Wait before attempting recovery
+      await this.delay(this.retryDelay);
+
+      // Re-initialize audio context
+      await this.initializeAudioContext();
+
+      console.log('Audio context recovery successful');
+      this.isRecovering = false;
+    } catch (error) {
+      console.error('Audio context recovery failed:', error);
+      this.isRecovering = false;
+      this.reportError('recovery', error);
+    }
+  }
+
+  /**
+   * Get comprehensive error statistics
+   */
+  getErrorStats(): {
+    errorCounts: Record<string, number>;
+    isRecovering: boolean;
+    lastErrorTime: number;
+    totalErrors: number;
+  } {
+    const totalErrors = Object.values(this.errorCounts).reduce(
+      (sum, count) => sum + count,
+      0
+    );
+
+    return {
+      errorCounts: { ...this.errorCounts },
+      isRecovering: this.isRecovering,
+      lastErrorTime: this.lastErrorTime,
+      totalErrors,
+    };
   }
 
   /**

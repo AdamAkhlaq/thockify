@@ -3,10 +3,10 @@
  * Detects keystrokes and plays corresponding mechanical keyboard sounds
  */
 
-import { AudioManager } from './audio-manager.js';
-import { classifyKey } from '../utils/audio-utils.js';
-import { ThockifySettings } from '../utils/storage.js';
-import { MESSAGE_TYPES } from '../utils/constants.js';
+import { AudioManager } from './audio-manager';
+import { classifyKey } from '../utils/audio-utils';
+import { ThockifySettings } from '../utils/storage';
+import { MESSAGE_TYPES } from '../utils/constants';
 
 class ThockifyContentScript {
   private audioManager = new AudioManager();
@@ -64,6 +64,11 @@ class ThockifyContentScript {
       passive: true,
       capture: true,
     });
+
+    document.addEventListener('keyup', this.handleKeyup.bind(this), {
+      passive: true,
+      capture: true,
+    });
   }
 
   /**
@@ -97,20 +102,48 @@ class ThockifyContentScript {
     // Skip certain key combinations
     if (event.ctrlKey || event.altKey || event.metaKey) return;
 
-    // Classify the key type
+    // Check if this key type is enabled in settings
     const keyType = classifyKey(event);
+    const audioSettings = this.settings.audioSettings;
+
+    // Check key-specific settings
+    if (keyType === 'space' && !audioSettings.enableSpacebarSound) return;
+    if (keyType === 'enter' && !audioSettings.enableEnterSound) return;
+    // backspace and generic keys are controlled by generic key sounds setting
+
+    try {
+      await this.audioManager.handleKeyDown(event, this.settings.volume);
+    } catch (error) {
+      console.error('Failed to handle key down:', error);
+    }
+  }
+
+  /**
+   * Handle keyup events for release sounds
+   */
+  private async handleKeyup(event: KeyboardEvent): Promise<void> {
+    // Skip if extension is disabled
+    if (!this.settings?.enabled) return;
+
+    // Skip if audio manager is not ready
+    if (!this.audioManager.isReady()) return;
+
+    // Skip certain key combinations
+    if (event.ctrlKey || event.altKey || event.metaKey) return;
 
     // Check if this key type is enabled in settings
+    const keyType = classifyKey(event);
     const audioSettings = this.settings.audioSettings;
-    if (keyType === 'spacebar' && !audioSettings.enableSpacebarSound) return;
-    if (keyType === 'enter' && !audioSettings.enableEnterSound) return;
-    if (keyType === 'shift' && !audioSettings.enableShiftSound) return;
 
-    // Play the appropriate sound
+    // Check key-specific settings
+    if (keyType === 'space' && !audioSettings.enableSpacebarSound) return;
+    if (keyType === 'enter' && !audioSettings.enableEnterSound) return;
+    // backspace and generic keys are controlled by generic key sounds setting
+
     try {
-      await this.audioManager.playKeySound(keyType, this.settings.volume);
+      await this.audioManager.handleKeyUp(event, this.settings.volume);
     } catch (error) {
-      console.error('Failed to play key sound:', error);
+      console.error('Failed to handle key up:', error);
     }
   }
 

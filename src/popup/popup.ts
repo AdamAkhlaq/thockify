@@ -3,8 +3,8 @@
  * Handles popup interface interactions and settings management
  */
 
-import { ThockifySettings } from '../utils/storage.js';
-import { MESSAGE_TYPES } from '../utils/constants.js';
+import { ThockifySettings } from '../utils/storage';
+import { MESSAGE_TYPES } from '../utils/constants';
 
 class ThockifyPopup {
   private settings: ThockifySettings | null = null;
