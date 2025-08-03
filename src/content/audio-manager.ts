@@ -68,52 +68,293 @@ export class AudioManager {
   private readonly errorThrottleTime: number = 5000; // 5 seconds between error reports
 
   /**
-   * Initialize the audio system with enhanced Web Audio API features and error handling
+   * Initialize the Audio Manager with browser compatibility checks
    */
   async initialize(): Promise<void> {
-    if (this.isInitialized) return;
+    console.log('Initializing AudioManager...');
 
-    let retryCount = 0;
-    const maxInitRetries = this.maxRetries;
+    // Step 8: Browser compatibility checks
+    const compatibility = this.checkBrowserCompatibility();
+    if (!compatibility.isSupported) {
+      console.error(
+        'Browser compatibility issues detected:',
+        compatibility.issues
+      );
+      throw new Error(
+        `Browser not supported: ${compatibility.issues.join(', ')}`
+      );
+    }
 
-    while (retryCount < maxInitRetries) {
+    if (compatibility.warnings.length > 0) {
+      console.warn('Browser compatibility warnings:', compatibility.warnings);
+    }
+
+    let lastError: unknown;
+
+    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
       try {
-        // Reset recovery state
-        this.isRecovering = false;
-
-        // Create audio context with error handling
         await this.initializeAudioContext();
-
-        // Initialize buffer pools
-        this.initializeBufferPools();
-
-        // Initialize key-specific sound mapping
-        this.initializeKeyMapping();
-
-        // Preload sounds with retry logic
         await this.preloadSounds();
-
+        this.initializeBufferPools();
+        this.initializeKeyMapping();
         this.isInitialized = true;
-        console.log(
-          'Thockify AudioManager initialized with Web Audio API and buffer pooling'
-        );
+        console.log('AudioManager initialized successfully');
         return;
       } catch (error) {
-        retryCount++;
-        this.handleInitializationError(error, retryCount, maxInitRetries);
+        lastError = error;
+        this.handleInitializationError(error, attempt, this.maxRetries);
 
-        if (retryCount < maxInitRetries) {
-          console.log(
-            `Retrying initialization in ${this.retryDelay}ms... (${retryCount}/${maxInitRetries})`
-          );
-          await this.delay(this.retryDelay);
+        if (attempt < this.maxRetries) {
+          const delay = this.retryDelay * Math.pow(2, attempt - 1); // Exponential backoff
+          console.log(`Retrying initialization in ${delay}ms...`);
+          await this.delay(delay);
         }
       }
     }
 
-    throw new Error(
-      `Failed to initialize AudioManager after ${maxInitRetries} attempts`
+    console.error('Failed to initialize AudioManager after all retry attempts');
+    this.isInitialized = false;
+    throw lastError;
+  }
+
+  /**
+   * Check browser compatibility for Web Audio API features
+   */
+  private checkBrowserCompatibility(): {
+    isSupported: boolean;
+    issues: string[];
+    warnings: string[];
+    capabilities: {
+      webAudio: boolean;
+      audioContext: boolean;
+      gainNode: boolean;
+      audioBuffer: boolean;
+      audioBufferSourceNode: boolean;
+      audioWorklet: boolean;
+      stereoPanner: boolean;
+      compressor: boolean;
+    };
+  } {
+    const issues: string[] = [];
+    const warnings: string[] = [];
+
+    // Check basic Web Audio API support
+    const webAudio = !!(
+      window.AudioContext || (window as any).webkitAudioContext
     );
+    if (!webAudio) {
+      issues.push('Web Audio API not supported');
+    }
+
+    // Check AudioContext constructor
+    const audioContext = !!(
+      window.AudioContext || (window as any).webkitAudioContext
+    );
+    if (!audioContext) {
+      issues.push('AudioContext not available');
+    }
+
+    // Check for deprecated webkit prefix (Chrome < 31, Safari < 7)
+    if ((window as any).webkitAudioContext && !window.AudioContext) {
+      warnings.push(
+        'Using deprecated webkitAudioContext - consider browser update'
+      );
+    }
+
+    // Create a temporary context to test features
+    let tempContext: AudioContext | null = null;
+    let gainNode = false;
+    let audioBuffer = false;
+    let audioBufferSourceNode = false;
+    let audioWorklet = false;
+    let stereoPanner = false;
+    let compressor = false;
+
+    try {
+      const AudioContextClass =
+        window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextClass) {
+        tempContext = new AudioContextClass();
+
+        // Test GainNode
+        try {
+          tempContext.createGain();
+          gainNode = true;
+        } catch (e) {
+          issues.push('GainNode not supported');
+        }
+
+        // Test AudioBuffer
+        try {
+          tempContext.createBuffer(2, 44100, 44100);
+          audioBuffer = true;
+        } catch (e) {
+          issues.push('AudioBuffer not supported');
+        }
+
+        // Test AudioBufferSourceNode
+        try {
+          tempContext.createBufferSource();
+          audioBufferSourceNode = true;
+        } catch (e) {
+          issues.push('AudioBufferSourceNode not supported');
+        }
+
+        // Test AudioWorklet (optional, for advanced features)
+        try {
+          if (tempContext.audioWorklet) {
+            audioWorklet = true;
+          } else {
+            warnings.push(
+              'AudioWorklet not available - advanced features limited'
+            );
+          }
+        } catch (e) {
+          // AudioWorklet not critical
+        }
+
+        // Test StereoPanner (optional)
+        try {
+          if (tempContext.createStereoPanner) {
+            tempContext.createStereoPanner();
+            stereoPanner = true;
+          } else {
+            warnings.push(
+              'StereoPanner not available - stereo positioning limited'
+            );
+          }
+        } catch (e) {
+          // StereoPanner not critical
+        }
+
+        // Test DynamicsCompressor (optional)
+        try {
+          if (tempContext.createDynamicsCompressor) {
+            tempContext.createDynamicsCompressor();
+            compressor = true;
+          } else {
+            warnings.push(
+              'DynamicsCompressor not available - audio dynamics limited'
+            );
+          }
+        } catch (e) {
+          // Compressor not critical
+        }
+      }
+    } catch (error) {
+      issues.push(
+        `AudioContext creation failed: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    } finally {
+      // Clean up temporary context
+      if (tempContext) {
+        try {
+          tempContext.close();
+        } catch (e) {
+          // Ignore close errors
+        }
+      }
+    }
+
+    // Check browser-specific requirements
+    this.checkBrowserSpecificFeatures(warnings);
+
+    return {
+      isSupported: issues.length === 0,
+      issues,
+      warnings,
+      capabilities: {
+        webAudio,
+        audioContext,
+        gainNode,
+        audioBuffer,
+        audioBufferSourceNode,
+        audioWorklet,
+        stereoPanner,
+        compressor,
+      },
+    };
+  }
+
+  /**
+   * Check browser-specific features and limitations
+   */
+  private checkBrowserSpecificFeatures(warnings: string[]): void {
+    const userAgent = navigator.userAgent.toLowerCase();
+
+    // Safari-specific checks
+    if (userAgent.includes('safari') && !userAgent.includes('chrome')) {
+      // Safari has stricter autoplay policies
+      warnings.push(
+        'Safari detected - audio may require user interaction to start'
+      );
+
+      // Safari sometimes has issues with certain sample rates
+      if (userAgent.includes('version/1')) {
+        warnings.push(
+          'Older Safari version - audio compatibility may be limited'
+        );
+      }
+    }
+
+    // Firefox-specific checks
+    if (userAgent.includes('firefox')) {
+      // Firefox has good Web Audio support but some minor differences
+      warnings.push(
+        'Firefox detected - ensure proper audio context resumption'
+      );
+    }
+
+    // Chrome-specific checks
+    if (userAgent.includes('chrome')) {
+      // Chrome has excellent Web Audio support
+      // Check for very old versions
+      const chromeMatch = userAgent.match(/chrome\/(\d+)/);
+      if (chromeMatch) {
+        const chromeVersion = parseInt(chromeMatch[1], 10);
+        if (chromeVersion < 66) {
+          warnings.push(
+            'Old Chrome version - consider updating for best audio performance'
+          );
+        }
+      }
+    }
+
+    // Edge-specific checks
+    if (userAgent.includes('edge') || userAgent.includes('edg/')) {
+      warnings.push(
+        'Edge detected - Web Audio support is good but may have minor differences'
+      );
+    }
+
+    // Mobile browser checks
+    if (
+      userAgent.includes('mobile') ||
+      userAgent.includes('android') ||
+      userAgent.includes('iphone')
+    ) {
+      warnings.push(
+        'Mobile browser detected - audio may have additional latency and power constraints'
+      );
+    }
+
+    // Check for incognito/private mode indicators
+    try {
+      // This is a heuristic and may not work in all browsers
+      if ((window as any).webkitRequestFileSystem) {
+        (window as any).webkitRequestFileSystem(
+          (window as any).TEMPORARY,
+          1,
+          () => {}, // Success - probably not incognito
+          () =>
+            warnings.push(
+              'Private browsing mode detected - some audio features may be limited'
+            )
+        );
+      }
+    } catch (e) {
+      // Ignore errors in detection
+    }
   }
 
   /**
@@ -309,6 +550,13 @@ export class AudioManager {
       lastErrorTime: this.lastErrorTime,
       totalErrors,
     };
+  }
+
+  /**
+   * Get browser compatibility information for debugging
+   */
+  getBrowserCompatibility(): ReturnType<typeof this.checkBrowserCompatibility> {
+    return this.checkBrowserCompatibility();
   }
 
   /**

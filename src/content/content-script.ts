@@ -27,7 +27,33 @@ class ThockifyContentScript {
 
       // Initialize audio manager if extension is enabled
       if (this.settings?.enabled) {
-        await this.audioManager.initialize();
+        try {
+          await this.audioManager.initialize();
+
+          // Log browser compatibility information for debugging
+          const compatibility = this.audioManager.getBrowserCompatibility();
+          console.log('Browser compatibility check:', compatibility);
+
+          if (compatibility.warnings.length > 0) {
+            console.warn(
+              'Browser compatibility warnings:',
+              compatibility.warnings
+            );
+          }
+        } catch (error) {
+          console.error('Failed to initialize audio manager:', error);
+
+          // Log compatibility info even if initialization failed
+          try {
+            const compatibility = this.audioManager.getBrowserCompatibility();
+            console.error('Browser compatibility issues:', compatibility);
+          } catch (compatError) {
+            console.error(
+              'Could not check browser compatibility:',
+              compatError
+            );
+          }
+        }
       }
 
       // Set up event listeners
