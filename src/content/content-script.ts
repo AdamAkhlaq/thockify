@@ -8,6 +8,14 @@ import { classifyKey } from '../utils/audio-utils';
 import { ThockifySettings } from '../utils/storage';
 import { MESSAGE_TYPES } from '../utils/constants';
 
+// Prevent multiple injections
+if (window.hasOwnProperty('thockifyContentScript')) {
+  throw new Error('Thockify content script already loaded');
+}
+
+// Mark this tab as having the content script loaded
+(window as any).thockifyContentScript = true;
+
 class ThockifyContentScript {
   private audioManager = new AudioManager();
   private settings: ThockifySettings | null = null;
@@ -18,22 +26,19 @@ class ThockifyContentScript {
   /**
    * Initialize the content script
    */
-  async initialize(): Promise<void> {
+  public async initialize(): Promise<void> {
     if (this.isInitialized) return;
 
     try {
-      // Load initial settings
       await this.loadSettings();
 
-      // Initialize audio manager if extension is enabled
+      // Only initialize audio if extension is enabled
       if (this.settings?.enabled) {
         try {
           await this.audioManager.initialize();
 
-          // Log browser compatibility information for debugging
+          // Log browser compatibility
           const compatibility = this.audioManager.getBrowserCompatibility();
-          console.log('Browser compatibility check:', compatibility);
-
           if (compatibility.warnings.length > 0) {
             console.warn(
               'Browser compatibility warnings:',
@@ -62,43 +67,10 @@ class ThockifyContentScript {
 
       this.isInitialized = true;
       console.log('Thockify content script initialized');
-
-      // Expose latency testing to console for debugging
-      (window as any).thockify = {
-        startLatencyTest: (duration = 30000) => {
-          if (this.audioManager) {
-            this.audioManager.enableLatencyTesting(duration);
-          } else {
-            console.error('AudioManager not available');
-          }
-        },
-        stopLatencyTest: () => {
-          if (this.audioManager) {
-            return this.audioManager.disableLatencyTesting();
-          } else {
-            console.error('AudioManager not available');
-            return null;
-          }
-        },
-        getCompatibility: () => {
-          if (this.audioManager) {
-            return this.audioManager.getBrowserCompatibility();
-          } else {
-            console.error('AudioManager not available');
-            return null;
-          }
-        },
-      };
-
-      console.log(
-        '🔧 Latency testing available via: thockify.startLatencyTest(), thockify.stopLatencyTest()'
-      );
     } catch (error) {
       console.error('Failed to initialize Thockify content script:', error);
     }
-  }
-
-  /**
+  } /**
    * Load settings from background script
    */
   private async loadSettings(): Promise<void> {
@@ -145,11 +117,21 @@ class ThockifyContentScript {
    * Handle keyboard events
    */
   private async handleKeydown(event: KeyboardEvent): Promise<void> {
+    console.debug('[Thockify] Keydown event detected:', event.key);
+
     // Skip if extension is disabled
-    if (!this.settings?.enabled) return;
+    if (!this.settings?.enabled) {
+      console.debug('[Thockify] Extension disabled, skipping');
+      return;
+    }
 
     // Skip if audio manager is not ready
-    if (!this.audioManager.isReady()) return;
+    if (!this.audioManager.isReady()) {
+      console.debug('[Thockify] AudioManager not ready, skipping');
+      return;
+    }
+
+    console.debug('[Thockify] AudioManager ready, proceeding with sound');
 
     // Debounce rapid keystrokes
     const now = Date.now();
@@ -169,6 +151,7 @@ class ThockifyContentScript {
     // backspace and generic keys are controlled by generic key sounds setting
 
     try {
+      console.debug('[Thockify] Calling handleKeyDown for:', keyType);
       await this.audioManager.handleKeyDown(event, this.settings.volume);
     } catch (error) {
       console.error('Failed to handle key down:', error);

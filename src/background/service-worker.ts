@@ -6,7 +6,7 @@
 import { StorageManager } from '../utils/storage';
 import { MESSAGE_TYPES } from '../utils/constants';
 
-// Extension installation handler
+// Extension installation and startup handler
 chrome.runtime.onInstalled.addListener(async details => {
   if (details.reason === 'install') {
     // Initialize default settings on first install
@@ -19,7 +19,77 @@ chrome.runtime.onInstalled.addListener(async details => {
       chrome.runtime.getManifest().version
     );
   }
+
+  // Inject content script into all existing tabs
+  await injectIntoExistingTabs();
 });
+
+// Handle browser startup
+chrome.runtime.onStartup.addListener(async () => {
+  console.log('Thockify: Browser started, injecting into existing tabs');
+  await injectIntoExistingTabs();
+});
+
+// Handle new tab creation
+chrome.tabs.onUpdated.addListener(async (tabId, changeInfo, tab) => {
+  // Only inject when the tab is completely loaded and has a valid URL
+  if (
+    changeInfo.status === 'complete' &&
+    tab.url &&
+    (tab.url.startsWith('http://') || tab.url.startsWith('https://'))
+  ) {
+    await injectIntoTab(tabId);
+  }
+});
+
+/**
+ * Inject content script into all existing tabs
+ */
+async function injectIntoExistingTabs(): Promise<void> {
+  try {
+    const tabs = await chrome.tabs.query({});
+    const injectionPromises = tabs
+      .filter(
+        tab =>
+          tab.id &&
+          tab.url &&
+          (tab.url.startsWith('http://') || tab.url.startsWith('https://'))
+      )
+      .map(tab => injectIntoTab(tab.id!));
+
+    await Promise.allSettled(injectionPromises);
+    console.log(
+      `Thockify: Attempted injection into ${injectionPromises.length} tabs`
+    );
+  } catch (error) {
+    console.error('Failed to inject into existing tabs:', error);
+  }
+}
+
+/**
+ * Inject content script into a specific tab
+ */
+async function injectIntoTab(tabId: number): Promise<void> {
+  try {
+    // Check if content script is already injected
+    const results = await chrome.scripting.executeScript({
+      target: { tabId },
+      func: () => window.hasOwnProperty('thockifyContentScript'),
+    });
+
+    // Only inject if not already present
+    if (!results[0]?.result) {
+      await chrome.scripting.executeScript({
+        target: { tabId },
+        files: ['content-script.js'],
+      });
+      console.log(`Thockify: Injected into tab ${tabId}`);
+    }
+  } catch (error) {
+    // Silently ignore injection failures (e.g., chrome:// pages, extensions pages)
+    console.debug(`Failed to inject into tab ${tabId}:`, error);
+  }
+}
 
 // Keyboard shortcuts handler
 chrome.commands.onCommand.addListener(async command => {

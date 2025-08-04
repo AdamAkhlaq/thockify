@@ -28,6 +28,7 @@ export class AudioManager {
   private currentVolume: number = AUDIO_CONFIG.DEFAULT_VOLUME;
   private isMuted: boolean = false;
   private volumeBeforeMute: number = AUDIO_CONFIG.DEFAULT_VOLUME;
+  private hasUserGesture = false; // Track if we've had a user gesture
 
   // Audio buffer pooling system
   private readonly sourceNodePool = new Set<AudioBufferSourceNode>();
@@ -61,7 +62,6 @@ export class AudioManager {
     loading: 0,
     timeout: 0,
   };
-  private readonly maxRetries: number = 3;
   private readonly retryDelay: number = 1000; // 1 second
   private isRecovering: boolean = false;
   private lastErrorTime: number = 0;
@@ -87,7 +87,7 @@ export class AudioManager {
   }[] = [];
 
   /**
-   * Initialize the Audio Manager with browser compatibility checks
+   * Initialize the Audio Manager with browser compatibility checks (without creating AudioContext)
    */
   async initialize(): Promise<void> {
     console.log('Initializing AudioManager...');
@@ -108,37 +108,51 @@ export class AudioManager {
       console.warn('Browser compatibility warnings:', compatibility.warnings);
     }
 
-    let lastError: unknown;
-
-    for (let attempt = 1; attempt <= this.maxRetries; attempt++) {
-      try {
-        await this.initializeAudioContext();
-        await this.preloadSounds();
-        this.initializeBufferPools();
-        this.initializeKeyMapping();
-        this.isInitialized = true;
-        console.log('AudioManager initialized successfully');
-        return;
-      } catch (error) {
-        lastError = error;
-        this.handleInitializationError(error, attempt, this.maxRetries);
-
-        if (attempt < this.maxRetries) {
-          const delay = this.retryDelay * Math.pow(2, attempt - 1); // Exponential backoff
-          console.log(`Retrying initialization in ${delay}ms...`);
-          await this.delay(delay);
-        }
-      }
+    try {
+      // Don't create AudioContext yet - wait for user gesture
+      // Just initialize mapping and pooling systems
+      this.initializeKeyMapping();
+      this.isInitialized = true;
+      console.log(
+        'AudioManager initialized successfully (AudioContext deferred until user gesture)'
+      );
+    } catch (error) {
+      console.error('Failed to initialize AudioManager:', error);
+      this.isInitialized = false;
+      throw error;
     }
-
-    console.error('Failed to initialize AudioManager after all retry attempts');
-    this.isInitialized = false;
-    throw lastError;
   }
 
   /**
-   * Check browser compatibility for Web Audio API features
+   * Initialize AudioContext on first user gesture
    */
+  private async initializeAudioOnUserGesture(): Promise<void> {
+    if (this.hasUserGesture || this.audioContext) {
+      return; // Already initialized
+    }
+
+    try {
+      console.log('Initializing audio system after user gesture...');
+
+      // Create audio context
+      await this.initializeAudioContext();
+
+      // Preload sounds
+      await this.preloadSounds();
+
+      // Initialize buffer pools
+      this.initializeBufferPools();
+
+      this.hasUserGesture = true;
+      console.log('Audio system initialized successfully after user gesture');
+    } catch (error) {
+      console.error(
+        'Failed to initialize audio system after user gesture:',
+        error
+      );
+      throw error;
+    }
+  }
   private checkBrowserCompatibility(): {
     isSupported: boolean;
     issues: string[];
@@ -464,24 +478,6 @@ export class AudioManager {
         throw error;
       }
     }
-  }
-
-  /**
-   * Handle initialization errors with logging and reporting
-   */
-  private handleInitializationError(
-    error: unknown,
-    retryCount: number,
-    maxRetries: number
-  ): void {
-    const errorMessage =
-      error instanceof Error ? error.message : 'Unknown error';
-    console.error(
-      `AudioManager initialization failed (attempt ${retryCount}/${maxRetries}): ${errorMessage}`
-    );
-
-    this.incrementErrorCount('audioContext');
-    this.reportError('initialization', error);
   }
 
   /**
@@ -1395,8 +1391,23 @@ export class AudioManager {
     // Start latency measurement
     const startTime = performance.now();
 
-    if (!this.isInitialized || !this.audioContext || !this.masterGainNode) {
+    if (!this.isInitialized) {
       console.warn('AudioManager not initialized');
+      return;
+    }
+
+    // Initialize audio system on first user gesture
+    if (!this.hasUserGesture) {
+      try {
+        await this.initializeAudioOnUserGesture();
+      } catch (error) {
+        console.error('Failed to initialize audio on user gesture:', error);
+        return;
+      }
+    }
+
+    if (!this.audioContext || !this.masterGainNode) {
+      console.warn('Audio context not available');
       return;
     }
 
@@ -1662,12 +1673,9 @@ export class AudioManager {
    * Check if audio system is ready with buffer validation
    */
   isReady(): boolean {
-    const hasContext = this.isInitialized && this.audioContext !== null;
-    const hasBuffers = this.audioBuffers.size > 0;
-    const preloadingComplete =
-      this.preloadingPromise === null || this.loadingStats.loadedFiles > 0;
-
-    return hasContext && hasBuffers && preloadingComplete;
+    // Audio system is ready if it's initialized (even without AudioContext yet)
+    // The AudioContext will be created on first user gesture
+    return this.isInitialized;
   }
 
   /**

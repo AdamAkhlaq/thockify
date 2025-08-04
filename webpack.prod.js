@@ -12,6 +12,10 @@ module.exports = merge(baseConfig, {
     new CopyWebpackPlugin({
       patterns: [
         {
+          from: 'manifest.json',
+          to: 'manifest.json',
+        },
+        {
           from: 'src/popup/popup.html',
           to: 'popup.html',
         },

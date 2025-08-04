@@ -38,7 +38,7 @@
     }
   },
 
-  "permissions": ["storage", "activeTab"],
+  "permissions": ["storage", "activeTab", "scripting", "tabs"],
 
   "host_permissions": ["<all_urls>"],
 
